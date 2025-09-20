@@ -265,6 +265,10 @@ var array<float> parsedLows         = array.new<float>()
 var array<float> highs              = array.new<float>()
 // @variable                        storage for raw lows
 var array<float> lows               = array.new<float>()
+// @variable                        storage for raw opens
+var array<float> opens              = array.new<float>()
+// @variable                        storage for raw closes
+var array<float> closes             = array.new<float>()
 // @variable                        storage for bar time values
 var array<int> times                = array.new<int>()
 // @variable                        last trailing swing high and low
@@ -327,6 +331,8 @@ parsedHighs.push(parsedHigh)
 parsedLows.push(parsedLow)
 highs.push(high)
 lows.push(low)
+opens.push(open)
+closes.push(close)
 times.push(time)
 
 //---------------------------------------------------------------------------------------------------------------------}
@@ -481,7 +487,7 @@ deleteOrderBlocks(bool internal = false) =>
 
     for [index,eachOrderBlock] in orderBlocks
         bool crossedOderBlock = false
-        
+
         if bearishOrderBlockMitigationSource > eachOrderBlock.barHigh and eachOrderBlock.bias == BEARISH
             crossedOderBlock := true
             if internal
@@ -494,8 +500,30 @@ deleteOrderBlocks(bool internal = false) =>
                 currentAlerts.internalBullishOrderBlock := true
             else
                 currentAlerts.swingBullishOrderBlock    := true
-        if crossedOderBlock                    
-            orderBlocks.remove(index)            
+        if crossedOderBlock
+            orderBlocks.remove(index)
+
+// @function            find the most recent opposite-colored candle between the current bar and pivot
+// @param pivotIndex    bar index of the pivot that originated the break
+// @param bullishBreak  true when the break is bullish (looking for bearish anchor)
+// @returns             index of the opposite-colored candle or pivotIndex when none is found
+getOppositeAnchorIndex(int pivotIndex, bool bullishBreak) =>
+    int startIndex = opens.size() > 0 ? math.min(bar_index, opens.size() - 1) : pivotIndex
+    if startIndex < pivotIndex
+        startIndex := pivotIndex
+
+    int foundIndex = pivotIndex
+
+    for index = startIndex to pivotIndex by -1
+        float openValue = opens.get(index)
+        float closeValue = closes.get(index)
+        if closeValue != openValue
+            bool candleBullish = closeValue > openValue
+            if candleBullish != bullishBreak
+                foundIndex := index
+                break
+
+    foundIndex
 
 // @function            fetch and store order blocks
 // @param p_ivot        base pivot point
@@ -505,19 +533,42 @@ deleteOrderBlocks(bool internal = false) =>
 storeOrdeBlock(pivot p_ivot,bool internal = false,int bias) =>
     if (not internal and showSwingOrderBlocksInput) or (internal and showInternalOrderBlocksInput)
 
-        array<float> a_rray = na
-        int parsedIndex = na
+        float orderHigh = na
+        float orderLow  = na
+        int orderTime   = na
 
-        if bias == BEARISH
-            a_rray      := parsedHighs.slice(p_ivot.barIndex,bar_index)
-            parsedIndex := p_ivot.barIndex + a_rray.indexof(a_rray.max())  
-        else
-            a_rray      := parsedLows.slice(p_ivot.barIndex,bar_index)
-            parsedIndex := p_ivot.barIndex + a_rray.indexof(a_rray.min())                        
+        int anchorIndex = getOppositeAnchorIndex(p_ivot.barIndex, bias == BULLISH)
+        bool anchorInRange = opens.size() > 0 and anchorIndex >= p_ivot.barIndex and anchorIndex <= bar_index and anchorIndex < opens.size()
 
-        orderBlock o_rderBlock          = orderBlock.new(parsedHighs.get(parsedIndex), parsedLows.get(parsedIndex), times.get(parsedIndex),bias)
+        if anchorInRange
+            float anchorOpen   = opens.get(anchorIndex)
+            float anchorClose  = closes.get(anchorIndex)
+            bool anchorIsDoji  = anchorClose == anchorOpen
+            bool oppositeColor = not anchorIsDoji and ((anchorClose > anchorOpen) != (bias == BULLISH))
+
+            if oppositeColor
+                orderHigh := highs.get(anchorIndex)
+                orderLow  := lows.get(anchorIndex)
+                orderTime := times.get(anchorIndex)
+
+        if na(orderTime)
+            array<float> a_rray = na
+            int parsedIndex = na
+
+            if bias == BEARISH
+                a_rray      := parsedHighs.slice(p_ivot.barIndex,bar_index)
+                parsedIndex := p_ivot.barIndex + a_rray.indexof(a_rray.max())
+            else
+                a_rray      := parsedLows.slice(p_ivot.barIndex,bar_index)
+                parsedIndex := p_ivot.barIndex + a_rray.indexof(a_rray.min())
+
+            orderHigh := parsedHighs.get(parsedIndex)
+            orderLow  := parsedLows.get(parsedIndex)
+            orderTime := times.get(parsedIndex)
+
+        orderBlock o_rderBlock          = orderBlock.new(orderHigh, orderLow, orderTime,bias)
         array<orderBlock> orderBlocks   = internal ? internalOrderBlocks : swingOrderBlocks
-        
+
         if orderBlocks.size() >= 100
             orderBlocks.pop()
         orderBlocks.unshift(o_rderBlock)
